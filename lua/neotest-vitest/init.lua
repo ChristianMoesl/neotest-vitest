@@ -95,7 +95,12 @@ function adapter.is_test_file(file_path)
   local is_test_file = false
 
   if string.match(file_path, "__tests__") then
-    is_test_file = true
+    for _, ext in ipairs({ "js", "jsx", "coffee", "ts", "tsx" }) do
+      if string.match(file_path, "%." .. ext .. "$") then
+        is_test_file = true
+        goto matched_pattern
+      end
+    end
   end
 
   for _, x in ipairs({ "e2e", "spec", "test" }) do
@@ -106,6 +111,7 @@ function adapter.is_test_file(file_path)
       end
     end
   end
+
   ::matched_pattern::
   return is_test_file and hasVitestDependency(file_path)
 end
@@ -115,19 +121,48 @@ end
 function adapter.discover_positions(path)
   local query = [[
     ; -- Namespaces --
-    ; Matches: `describe('context')`
+    
+    ; 1. STANDARD: Matches `describe('context', () => ...)`
     ((call_expression
       function: (identifier) @func_name (#eq? @func_name "describe")
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
-    ; Matches: `describe.only('context')`
+
+    ; 1. WRAPPED: Matches `describe('context', withReact/withExpress(() => ...))`
+    ((call_expression
+      function: (identifier) @func_name (#eq? @func_name "describe")
+      arguments: (arguments 
+        (string (string_fragment) @namespace.name) 
+        (call_expression
+          function: (identifier) @wrapper (#any-of? @wrapper "withReact" "withExpress" "withAppContext")
+          arguments: (arguments (arrow_function))
+        )
+      )
+    )) @namespace.definition
+
+    ; 2. STANDARD: Matches `describe.only('context', () => ...)`
     ((call_expression
       function: (member_expression
         object: (identifier) @func_name (#any-of? @func_name "describe")
       )
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
-    ; Matches: `describe.each(['data'])('context')`
+
+    ; 2. WRAPPED: Matches `describe.only('context', withReact/withExpress(() => ...))`
+    ((call_expression
+      function: (member_expression
+        object: (identifier) @func_name (#any-of? @func_name "describe")
+      )
+      arguments: (arguments 
+        (string (string_fragment) @namespace.name) 
+        (call_expression
+          function: (identifier) @wrapper (#any-of? @wrapper "withReact" "withExpress" "withAppContext")
+          arguments: (arguments (arrow_function))
+        )
+      )
+    )) @namespace.definition
+
+    ; 3. STANDARD: Matches `describe.each(['data'])('context', () => ...)`
     ((call_expression
       function: (call_expression
         function: (member_expression
@@ -136,6 +171,23 @@ function adapter.discover_positions(path)
       )
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
+
+    ; 3. WRAPPED: Matches `describe.each(...)('context', withReact/withExpress(() => ...))`
+    ((call_expression
+      function: (call_expression
+        function: (member_expression
+          object: (identifier) @func_name (#any-of? @func_name "describe")
+        )
+      )
+      arguments: (arguments 
+        (string (string_fragment) @namespace.name) 
+        (call_expression
+          function: (identifier) @wrapper (#any-of? @wrapper "withReact" "withExpress" "withAppContext")
+          arguments: (arguments (arrow_function))
+        )
+      )
+    )) @namespace.definition
+
     ; Matches: `layer(...)('context', () => ...)` (@effect/vitest syntax)
     ((call_expression
       function: (call_expression
@@ -150,6 +202,7 @@ function adapter.discover_positions(path)
       function: (identifier) @func_name (#any-of? @func_name "it" "test")
       arguments: (arguments (string (string_fragment) @test.name) (arrow_function))
     )) @test.definition
+
     ; Matches: `test.only('test') / it.only('test')`
     ((call_expression
       function: (member_expression
@@ -157,6 +210,7 @@ function adapter.discover_positions(path)
       )
       arguments: (arguments (string (string_fragment) @test.name) (arrow_function))
     )) @test.definition
+
     ; Matches: `test.each(['data'])('test') / it.each(['data'])('test')`
     ((call_expression
       function: (call_expression
